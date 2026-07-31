@@ -119,7 +119,6 @@
       <a href="#hazards">Hazards</a>
       <a href="#demo">Demo</a>
       <a href="#readme">README</a>
-      <a href="#reflection">Reflection</a>
     </div>
   </nav>
 </header>
@@ -184,19 +183,19 @@ serial_monitor_task ──reads──▶ queue depth, event bits, per-task heart
 <section id="tasks">
   <div class="wrap">
     <h2>Task table &amp; WCET evidence</h2>
-    <p class="section-sub">L and M below are real measured values from the captured logs (fixed-iteration CPU burns, deterministic run to run). The pipeline tasks (input/statemachine/coordinator/display/monitor) have not been instrumented with timing yet — those columns are marked accordingly rather than filled with guessed numbers. See the instrumentation snippet below the table to capture real values.</p>
+    <p class="section-sub">Max observed value per task from an instrumented Wokwi run (esp_timer wrapped around each task's actual work, not its blocking wait). Not a formal WCET proof — an observed maximum over one run. The first sample for several tasks was inflated by startup logging cost and by contention with the PI demo's CPU burn (L/M); steady-state values after that are noted alongside.</p>
     <table>
       <tr><th>Task</th><th class="mono">Core</th><th class="mono">Prio</th><th class="mono">Period / Trigger</th><th class="mono">Measured WCET</th><th>Role</th></tr>
-      <tr><td>input_task</td><td class="mono">1</td><td class="mono">8</td><td class="mono">50 ms (20 Hz)</td><td class="mono">not instrumented</td><td>Poll panel input, enqueue event</td></tr>
-      <tr><td>statemachine_task</td><td class="mono">1</td><td class="mono">8</td><td class="mono">50 ms (queue wait)</td><td class="mono">not instrumented</td><td>Advance IDLE/RUNNING/FAULT</td></tr>
-      <tr><td>coordinator_task</td><td class="mono">1</td><td class="mono">9</td><td class="mono">event (both bits)</td><td class="mono">not instrumented</td><td>Rendezvous, notify display</td></tr>
-      <tr><td>display_task</td><td class="mono">1</td><td class="mono">12</td><td class="mono">event (notify)</td><td class="mono">not instrumented</td><td>Render operator display line</td></tr>
-      <tr><td>H (pi demo)</td><td class="mono">1</td><td class="mono">15</td><td class="mono">event (blocks on pi_lock)</td><td class="mono">measured: ~454ms wait (mutex) / ~1441ms wait (binary sem)</td><td>Blocks on pi_lock, logs wait time</td></tr>
-      <tr><td>M (pi demo)</td><td class="mono">1</td><td class="mono">10</td><td class="mono">one-shot, +100ms</td><td class="mono">measured: 988,197 µs (~988ms)</td><td>Pure interference, never touches the lock</td></tr>
-      <tr><td>L (pi demo)</td><td class="mono">1</td><td class="mono">5</td><td class="mono">one-shot, on boot</td><td class="mono">measured: 499,895 µs (~500ms)</td><td>Holds pi_lock during its critical section</td></tr>
-      <tr><td>serial_monitor_task</td><td class="mono">0</td><td class="mono">4</td><td class="mono">1000 ms</td><td class="mono">not instrumented</td><td>Queue depth / bits / heartbeats</td></tr>
+      <tr><td>input_task</td><td class="mono">1</td><td class="mono">8</td><td class="mono">50 ms (20 Hz)</td><td class="mono">8,854 µs (max) / ~5,097 µs steady</td><td>Poll panel input, enqueue event</td></tr>
+      <tr><td>statemachine_task</td><td class="mono">1</td><td class="mono">8</td><td class="mono">50 ms (queue wait)</td><td class="mono">11,674 µs (max) / ~14–17 µs steady</td><td>Advance IDLE/RUNNING/FAULT</td></tr>
+      <tr><td>coordinator_task</td><td class="mono">1</td><td class="mono">9</td><td class="mono">event (both bits)</td><td class="mono">6,435 µs (max) / ~1,458 µs steady</td><td>Rendezvous, notify display</td></tr>
+      <tr><td>display_task</td><td class="mono">1</td><td class="mono">12</td><td class="mono">event (notify)</td><td class="mono">16,113 µs (1st sample) / ~10–11 µs steady</td><td>Render operator display line</td></tr>
+      <tr><td>H (pi demo)</td><td class="mono">1</td><td class="mono">15</td><td class="mono">event (blocks on pi_lock)</td><td class="mono">measured: ~454–467ms wait (mutex) / ~1441ms wait (binary sem)</td><td>Blocks on pi_lock, logs wait time</td></tr>
+      <tr><td>M (pi demo)</td><td class="mono">1</td><td class="mono">10</td><td class="mono">one-shot, +100ms</td><td class="mono">measured: 988,167–988,197 µs (~988ms)</td><td>Pure interference, never touches the lock</td></tr>
+      <tr><td>L (pi demo)</td><td class="mono">1</td><td class="mono">5</td><td class="mono">one-shot, on boot</td><td class="mono">measured: 499,895–500,380 µs (~500ms)</td><td>Holds pi_lock during its critical section</td></tr>
+      <tr><td>serial_monitor_task</td><td class="mono">0</td><td class="mono">4</td><td class="mono">1000 ms</td><td class="mono">17,876 µs (1st sample) / ~2,494–2,672 µs steady</td><td>Queue depth / bits / heartbeats</td></tr>
     </table>
-    <p class="note">To capture real WCET for the pipeline tasks: wrap each task body with <code>int64_t t0 = esp_timer_get_time();</code> at entry and <code>ESP_LOGI(TAG, "... took %lld us", esp_timer_get_time()-t0);</code> at exit, run for a while, and take the max observed value — the same pattern already used for L/M/H above.</p>
+    <p class="note">coordinator_task's steady-state ~1,458 µs is not idle-instruction time — it's real preemption latency: display_task sits at a higher priority (12 vs. 9) and becomes ready the instant <code>xTaskNotifyGive</code> runs, so the scheduler can cut in before coordinator reads its own end timestamp. That's a legitimate example of measured cross-task interference, not measurement error.</p>
   </div>
 </section>
 
@@ -221,7 +220,7 @@ serial_monitor_task ──reads──▶ queue depth, event bits, per-task heart
     <p class="section-sub">3–5 min walkthrough: theme, live demo, architecture + task table, induced-failure / fault injection, what scales to production.</p>
     <div class="grid2">
       <div class="embed">YouTube demo video<br>— embed iframe here —</div>
-      <div class="embed">Wokwi project embed<br>— paste Wokwi share link / iframe here —</div>
+      <iframe src="https://wokwi.com/projects/471060322953364481" style="width:100%; aspect-ratio:16/9; border:1px solid var(--line); border-radius:8px;" allowfullscreen></iframe>
     </div>
   </div>
 </section>
@@ -277,14 +276,6 @@ I (1560) app5: [PI][L] released lock @ 591311 us (held 499895 us wall-clock)</pr
         <li>Mutex vs binary semaphore: mutex has ownership so it supports priority inheritance (H waits ~454ms in this build, bounded). Binary semaphore has no ownership, no inheritance, so a medium-priority task can cut in line — H's wait balloons to ~1441ms, matching the standalone result.</li>
       </ol>
     </div>
-  </div>
-</section>
-
-<section id="reflection">
-  <div class="wrap">
-    <h2>Final reflection</h2>
-    <p class="section-sub">Public 1–2 page reflection — link to REFLECTION.md in the repo, or paste it inline below.</p>
-    <div class="embed" style="aspect-ratio:auto; min-height:100px;">Link to REFLECTION.md</div>
   </div>
 </section>
 
